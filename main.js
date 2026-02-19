@@ -1,7 +1,63 @@
 const path = require("path");
 const fs = require("fs/promises");
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const fsSync = require("fs");
+const http = require("http");
+const https = require("https");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("child_process");
+const ffmpegStatic = require("ffmpeg-static");
+
+let rendererServer = null;
+let rendererServerUrl = null;
+
+function getContentType(filePath) {
+  if (filePath.endsWith(".html")) return "text/html; charset=utf-8";
+  if (filePath.endsWith(".js")) return "text/javascript; charset=utf-8";
+  if (filePath.endsWith(".css")) return "text/css; charset=utf-8";
+  if (filePath.endsWith(".json")) return "application/json; charset=utf-8";
+  if (filePath.endsWith(".svg")) return "image/svg+xml";
+  if (filePath.endsWith(".png")) return "image/png";
+  if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) return "image/jpeg";
+  return "text/plain; charset=utf-8";
+}
+
+function startRendererServer() {
+  return new Promise((resolve, reject) => {
+    const rendererRoot = path.join(__dirname, "renderer");
+    rendererServer = http.createServer((req, res) => {
+      const rawUrl = req.url || "/";
+      const normalizedPath = rawUrl.split("?")[0] === "/" ? "index.html" : rawUrl.split("?")[0];
+      const safePath = path
+        .normalize(normalizedPath)
+        .replace(/^(\.\.[/\\])+/, "")
+        .replace(/^[/\\]+/, "");
+      const filePath = path.join(rendererRoot, safePath);
+
+      if (!filePath.startsWith(rendererRoot)) {
+        res.writeHead(403);
+        res.end("Forbidden");
+        return;
+      }
+
+      fsSync.readFile(filePath, (error, data) => {
+        if (error) {
+          res.writeHead(404);
+          res.end("Not found");
+          return;
+        }
+        res.writeHead(200, { "Content-Type": getContentType(filePath) });
+        res.end(data);
+      });
+    });
+
+    rendererServer.on("error", reject);
+    rendererServer.listen(0, "127.0.0.1", () => {
+      const address = rendererServer.address();
+      rendererServerUrl = `http://127.0.0.1:${address.port}`;
+      resolve();
+    });
+  });
+}
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -14,7 +70,7 @@ function createWindow() {
     }
   });
 
-  window.loadFile(path.join(__dirname, "renderer", "index.html"));
+  window.loadURL(rendererServerUrl);
 }
 
 async function commandExists(command, args = ["--version"]) {
@@ -22,6 +78,73 @@ async function commandExists(command, args = ["--version"]) {
     const child = spawn(command, args, { stdio: "ignore" });
     child.on("error", () => resolve(false));
     child.on("close", (code) => resolve(code === 0));
+  });
+}
+
+function getBundledFfmpegPath() {
+  if (!ffmpegStatic) return null;
+  return ffmpegStatic;
+}
+
+function getUserToolsDir() {
+  return path.join(app.getPath("userData"), "tools");
+}
+
+function getUserYtDlpPath() {
+  return path.join(getUserToolsDir(), "yt-dlp");
+}
+
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveYtDlpPath() {
+  const localPath = getUserYtDlpPath();
+  if (await fileExists(localPath)) {
+    return localPath;
+  }
+  return "yt-dlp";
+}
+
+async function resolveFfmpegPath() {
+  const bundled = getBundledFfmpegPath();
+  if (bundled && (await fileExists(bundled))) {
+    return bundled;
+  }
+  return "ffmpeg";
+}
+
+function downloadFile(url, targetPath) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, (response) => {
+      if (
+        response.statusCode &&
+        response.statusCode >= 300 &&
+        response.statusCode < 400 &&
+        response.headers.location
+      ) {
+        downloadFile(response.headers.location, targetPath).then(resolve).catch(reject);
+        return;
+      }
+
+      if (response.statusCode !== 200) {
+        reject(new Error(`다운로드 실패: HTTP ${response.statusCode}`));
+        return;
+      }
+
+      const stream = fsSync.createWriteStream(targetPath, { mode: 0o755 });
+      response.pipe(stream);
+      stream.on("finish", () => {
+        stream.close(() => resolve());
+      });
+      stream.on("error", (error) => reject(error));
+    });
+    request.on("error", reject);
   });
 }
 
@@ -37,13 +160,41 @@ ipcMain.handle("pick-output-folder", async () => {
 });
 
 ipcMain.handle("check-tools", async () => {
-  const ytDlp = await commandExists("yt-dlp");
-  const ffmpeg = await commandExists("ffmpeg", ["-version"]);
-  return { ytDlp, ffmpeg };
+  const ytDlpPath = await resolveYtDlpPath();
+  const ffmpegPath = await resolveFfmpegPath();
+  const ytDlp =
+    ytDlpPath !== "yt-dlp" ||
+    (await commandExists("yt-dlp"));
+  const ffmpeg =
+    ffmpegPath !== "ffmpeg" ||
+    (await commandExists("ffmpeg", ["-version"]));
+  return {
+    ytDlp,
+    ffmpeg,
+    autoInstallableYtDlp: true,
+    ytDlpPath,
+    ffmpegPath
+  };
+});
+
+ipcMain.handle("install-tools", async () => {
+  const toolsDir = getUserToolsDir();
+  await fs.mkdir(toolsDir, { recursive: true });
+
+  const ytDlpPath = getUserYtDlpPath();
+  await downloadFile(
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
+    ytDlpPath
+  );
+  await fs.chmod(ytDlpPath, 0o755);
+
+  return { ok: true, ytDlpPath };
 });
 
 ipcMain.handle("download-mp3", async (_, payload) => {
   const { url, outputFolder, startTime, endTime } = payload;
+  const ytDlpBin = await resolveYtDlpPath();
+  const ffmpegBin = await resolveFfmpegPath();
   const outputTemplate = path.join(outputFolder, "%(title)s.%(ext)s");
 
   const args = [
@@ -52,6 +203,8 @@ ipcMain.handle("download-mp3", async (_, payload) => {
     "mp3",
     "--audio-quality",
     "0",
+    "--ffmpeg-location",
+    ffmpegBin,
     "-o",
     outputTemplate
   ];
@@ -64,7 +217,7 @@ ipcMain.handle("download-mp3", async (_, payload) => {
 
   return new Promise((resolve, reject) => {
     const logs = [];
-    const child = spawn("yt-dlp", args);
+    const child = spawn(ytDlpBin, args);
 
     child.stdout.on("data", (data) => logs.push(data.toString()));
     child.stderr.on("data", (data) => logs.push(data.toString()));
@@ -140,7 +293,16 @@ ipcMain.handle("copy-file-to-device", async (_, payload) => {
   return { ok: true, destinationPath };
 });
 
-app.whenReady().then(createWindow);
+ipcMain.handle("open-external-url", async (_, payload) => {
+  const { url } = payload;
+  await shell.openExternal(url);
+  return { ok: true };
+});
+
+app.whenReady().then(async () => {
+  await startRendererServer();
+  createWindow();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -151,5 +313,11 @@ app.on("window-all-closed", () => {
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+  }
+});
+
+app.on("before-quit", () => {
+  if (rendererServer) {
+    rendererServer.close();
   }
 });

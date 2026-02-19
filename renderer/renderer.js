@@ -4,9 +4,11 @@ const startInput = document.getElementById("startInput");
 const endInput = document.getElementById("endInput");
 const setStartFromPlayerButton = document.getElementById("setStartFromPlayerButton");
 const setEndFromPlayerButton = document.getElementById("setEndFromPlayerButton");
+const openInBrowserButton = document.getElementById("openInBrowserButton");
 const folderInput = document.getElementById("folderInput");
 const pickFolderButton = document.getElementById("pickFolderButton");
 const downloadButton = document.getElementById("downloadButton");
+const installToolsButton = document.getElementById("installToolsButton");
 const refreshFilesButton = document.getElementById("refreshFilesButton");
 const statusText = document.getElementById("statusText");
 const logText = document.getElementById("logText");
@@ -18,6 +20,7 @@ const filesList = document.getElementById("filesList");
 let player = null;
 let playerReady = false;
 let currentVideoId = "";
+let currentVideoUrl = "";
 let outputFiles = [];
 
 function setStatus(text) {
@@ -183,19 +186,38 @@ async function refreshFiles() {
 
 function ensurePlayer(videoId) {
   currentVideoId = videoId;
-  if (player) {
-    player.loadVideoById(videoId);
-    return;
+  if (player && typeof player.destroy === "function") {
+    player.destroy();
+    player = null;
+    playerReady = false;
   }
+
   player = new window.YT.Player("videoFrame", {
     videoId,
     playerVars: {
       modestbranding: 1,
-      rel: 0
+      rel: 0,
+      origin: window.location.origin
     },
     events: {
       onReady: () => {
         playerReady = true;
+      },
+      onError: (event) => {
+        const code = Number(event.data);
+        if (code === 101 || code === 150) {
+          setStatus("이 영상은 임베드 재생이 막혀 있습니다. '브라우저로 열기'를 사용하세요.");
+          return;
+        }
+        if (code === 2) {
+          setStatus("영상 URL/ID가 올바르지 않습니다.");
+          return;
+        }
+        if (code === 100) {
+          setStatus("삭제되었거나 비공개 영상입니다.");
+          return;
+        }
+        setStatus(`플레이어 오류 (${code}): 브라우저 열기로 재생하세요.`);
       }
     }
   });
@@ -204,6 +226,7 @@ function ensurePlayer(videoId) {
 window.onYouTubeIframeAPIReady = () => {};
 
 loadVideoButton.addEventListener("click", () => {
+  currentVideoUrl = urlInput.value.trim();
   const id = extractYouTubeId(urlInput.value);
   if (!id) {
     setStatus("유효한 YouTube 링크를 입력하세요.");
@@ -231,6 +254,37 @@ setEndFromPlayerButton.addEventListener("click", () => {
     return;
   }
   endInput.value = secondsToTime(player.getCurrentTime());
+});
+
+openInBrowserButton.addEventListener("click", async () => {
+  const url = currentVideoUrl || urlInput.value.trim();
+  if (!url) {
+    setStatus("브라우저로 열 링크가 없습니다.");
+    return;
+  }
+  await window.shokzApi.openExternalUrl({ url });
+});
+
+installToolsButton.addEventListener("click", async () => {
+  try {
+    installToolsButton.disabled = true;
+    setStatus("도구 설치 중...");
+    appendLog("yt-dlp 자동 설치 시작");
+    await window.shokzApi.installTools();
+    const tools = await window.shokzApi.checkTools();
+    appendLog(`- yt-dlp: ${tools.ytDlp ? "OK" : "없음"}`);
+    appendLog(`- ffmpeg: ${tools.ffmpeg ? "OK" : "없음"}`);
+    if (tools.ytDlp && tools.ffmpeg) {
+      setStatus("도구 설치 완료");
+    } else {
+      setStatus("일부 도구 설치 실패");
+    }
+  } catch (error) {
+    appendLog(error.message);
+    setStatus("도구 설치 실패");
+  } finally {
+    installToolsButton.disabled = false;
+  }
 });
 
 pickFolderButton.addEventListener("click", async () => {
@@ -288,11 +342,11 @@ downloadButton.addEventListener("click", async () => {
   setStatus("도구 확인 중...");
   const tools = await window.shokzApi.checkTools();
   if (!tools.ytDlp || !tools.ffmpeg) {
-    setStatus("yt-dlp / ffmpeg 설치가 필요합니다.");
+    setStatus("도구가 필요합니다. '도구 자동 설치'를 먼저 실행하세요.");
     appendLog("필수 도구 누락:");
     appendLog(`- yt-dlp: ${tools.ytDlp ? "OK" : "없음"}`);
     appendLog(`- ffmpeg: ${tools.ffmpeg ? "OK" : "없음"}`);
-    appendLog("macOS 예시: brew install yt-dlp ffmpeg");
+    appendLog("앱 내 '도구 자동 설치' 버튼을 눌러 설치할 수 있습니다.");
     return;
   }
 

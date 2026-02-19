@@ -15,15 +15,17 @@
 
 필수:
 
-- `yt-dlp`
-- `ffmpeg`
 - Node.js 20+
 
 ```bash
-brew install yt-dlp ffmpeg
 npm install
 npm start
 ```
+
+도구 설치:
+
+- `ffmpeg`는 앱에 포함됩니다.
+- `yt-dlp`는 앱에서 `도구 자동 설치` 버튼으로 설치됩니다.
 
 ## MP3 구간 추출
 
