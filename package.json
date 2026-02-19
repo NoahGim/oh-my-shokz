@@ -1,0 +1,32 @@
+{
+  "name": "oh-my-shokz",
+  "version": "0.1.0",
+  "description": "YouTube to MP3 helper for Shokz transfer workflow",
+  "main": "main.js",
+  "author": "noahgim",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.noahgim.ohmyshokz",
+    "productName": "OhMyShokz",
+    "mac": {
+      "category": "public.app-category.music",
+      "target": [
+        "dmg"
+      ]
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json"
+    ]
+  }
+}
