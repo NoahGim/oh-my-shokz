@@ -191,13 +191,61 @@ ipcMain.handle("install-tools", async () => {
   return { ok: true, ytDlpPath };
 });
 
+ipcMain.handle("get-video-metadata", async (_, payload) => {
+  const { url } = payload;
+  const ytDlpBin = await resolveYtDlpPath();
+  if (ytDlpBin === "yt-dlp" && !(await commandExists("yt-dlp"))) {
+    return null;
+  }
+
+  const args = ["--dump-single-json", "--no-playlist", "--skip-download", url];
+  return new Promise((resolve) => {
+    const logs = [];
+    let stdout = "";
+    const child = spawn(ytDlpBin, args);
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+    child.stderr.on("data", (data) => logs.push(data.toString()));
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      try {
+        const json = JSON.parse(stdout);
+        resolve({
+          title: json.title || "",
+          duration: Number(json.duration || 0)
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+});
+
 ipcMain.handle("download-mp3", async (_, payload) => {
-  const { url, outputFolder, startTime, endTime } = payload;
+  const { url, outputFolder, startTime, endTime, outputName } = payload;
   const ytDlpBin = await resolveYtDlpPath();
   const ffmpegBin = await resolveFfmpegPath();
-  const outputTemplate = path.join(outputFolder, "%(title)s.%(ext)s");
+  const outputTemplate = outputName
+    ? path.join(outputFolder, `${outputName}.%(ext)s`)
+    : path.join(outputFolder, "%(title)s.%(ext)s");
+
+  let normalizedUrl = url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.includes("youtube.com") && parsed.searchParams.get("v")) {
+      normalizedUrl = `https://www.youtube.com/watch?v=${parsed.searchParams.get("v")}`;
+    }
+  } catch {
+    normalizedUrl = url;
+  }
 
   const args = [
+    "--no-playlist",
     "-x",
     "--audio-format",
     "mp3",
@@ -213,7 +261,7 @@ ipcMain.handle("download-mp3", async (_, payload) => {
     args.push("--download-sections", `*${startTime}-${endTime}`);
   }
 
-  args.push(url);
+  args.push(normalizedUrl);
 
   return new Promise((resolve, reject) => {
     const logs = [];
@@ -224,7 +272,11 @@ ipcMain.handle("download-mp3", async (_, payload) => {
     child.on("error", (error) => reject(new Error(`yt-dlp 실행 실패: ${error.message}`)));
     child.on("close", (code) => {
       if (code === 0) {
-        resolve({ ok: true, logs: logs.join("") });
+        resolve({
+          ok: true,
+          logs: logs.join(""),
+          outputPath: outputName ? path.join(outputFolder, `${outputName}.mp3`) : null
+        });
         return;
       }
       reject(new Error(`다운로드 실패 (exit code ${code})\n${logs.join("")}`));
