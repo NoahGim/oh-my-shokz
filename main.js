@@ -6,6 +6,7 @@ const https = require("https");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("child_process");
 const ffmpegStatic = require("ffmpeg-static");
+const ffprobeStatic = require("ffprobe-static");
 
 let rendererServer = null;
 let rendererServerUrl = null;
@@ -86,8 +87,17 @@ function getBundledFfmpegPath() {
   return ffmpegStatic;
 }
 
+function getBundledFfprobePath() {
+  if (!ffprobeStatic) return null;
+  return typeof ffprobeStatic === "string" ? ffprobeStatic : ffprobeStatic.path;
+}
+
 function getUserToolsDir() {
   return path.join(app.getPath("userData"), "tools");
+}
+
+function getUserFfmpegToolsDir() {
+  return path.join(getUserToolsDir(), "ffmpeg-bin");
 }
 
 function getUserYtDlpPath() {
@@ -111,12 +121,56 @@ async function resolveYtDlpPath() {
   return "yt-dlp";
 }
 
+async function linkOrCopyTool(sourcePath, targetPath) {
+  if (!sourcePath || !(await fileExists(sourcePath))) return false;
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  try {
+    await fs.unlink(targetPath);
+  } catch {}
+  try {
+    await fs.symlink(sourcePath, targetPath);
+  } catch {
+    await fs.copyFile(sourcePath, targetPath);
+  }
+  await fs.chmod(targetPath, 0o755);
+  return true;
+}
+
+async function ensureBundledFfmpegToolsDir() {
+  const ffmpegPath = getBundledFfmpegPath();
+  const ffprobePath = getBundledFfprobePath();
+  if (!(ffmpegPath && ffprobePath && (await fileExists(ffmpegPath)) && (await fileExists(ffprobePath)))) {
+    return null;
+  }
+
+  const toolsDir = getUserFfmpegToolsDir();
+  await Promise.all([
+    linkOrCopyTool(ffmpegPath, path.join(toolsDir, "ffmpeg")),
+    linkOrCopyTool(ffprobePath, path.join(toolsDir, "ffprobe"))
+  ]);
+  return toolsDir;
+}
+
 async function resolveFfmpegPath() {
   const bundled = getBundledFfmpegPath();
   if (bundled && (await fileExists(bundled))) {
     return bundled;
   }
   return "ffmpeg";
+}
+
+async function resolveFfprobePath() {
+  const bundled = getBundledFfprobePath();
+  if (bundled && (await fileExists(bundled))) {
+    return bundled;
+  }
+  return "ffprobe";
+}
+
+async function resolveFfmpegLocation() {
+  const bundledToolsDir = await ensureBundledFfmpegToolsDir();
+  if (bundledToolsDir) return bundledToolsDir;
+  return await resolveFfmpegPath();
 }
 
 function downloadFile(url, targetPath) {
@@ -166,18 +220,24 @@ ipcMain.handle("check-tools", async () => {
 
   const ytDlpPath = await resolveYtDlpPath();
   const ffmpegPath = await resolveFfmpegPath();
+  const ffprobePath = await resolveFfprobePath();
+  const ffmpegLocation = await resolveFfmpegLocation();
 
-  const [hasYtDlp, hasFfmpeg] = await Promise.all([
+  const [hasYtDlp, hasFfmpeg, hasFfprobe] = await Promise.all([
     ytDlpPath === "yt-dlp" ? commandExists("yt-dlp") : Promise.resolve(fsSync.existsSync(ytDlpPath)),
-    ffmpegPath === "ffmpeg" ? commandExists("ffmpeg") : Promise.resolve(fsSync.existsSync(ffmpegPath))
+    ffmpegPath === "ffmpeg" ? commandExists("ffmpeg") : Promise.resolve(fsSync.existsSync(ffmpegPath)),
+    ffprobePath === "ffprobe" ? commandExists("ffprobe") : Promise.resolve(fsSync.existsSync(ffprobePath))
   ]);
 
   cachedTools = {
     ytDlp: hasYtDlp,
-    ffmpeg: hasFfmpeg,
+    ffmpeg: hasFfmpeg && hasFfprobe,
+    ffprobe: hasFfprobe,
     autoInstallableYtDlp: true,
     ytDlpPath,
-    ffmpegPath
+    ffmpegPath,
+    ffprobePath,
+    ffmpegLocation
   };
   return cachedTools;
 });
@@ -290,7 +350,7 @@ ipcMain.handle("get-playlist-metadata", async (_, payload) => {
 ipcMain.handle("download-mp3", async (_, payload) => {
   const { url, outputFolder, startTime, endTime, outputName } = payload;
   const ytDlpBin = await resolveYtDlpPath();
-  const ffmpegBin = await resolveFfmpegPath();
+  const ffmpegLocation = await resolveFfmpegLocation();
   const outputTemplate = outputName
     ? path.join(outputFolder, `${outputName}.%(ext)s`)
     : path.join(outputFolder, "%(title)s.%(ext)s");
@@ -313,7 +373,7 @@ ipcMain.handle("download-mp3", async (_, payload) => {
     "--audio-quality",
     "0",
     "--ffmpeg-location",
-    ffmpegBin,
+    ffmpegLocation,
     "--no-check-certificates",
     "--no-warnings",
     "-o",
@@ -359,7 +419,7 @@ ipcMain.handle("download-mp3", async (_, payload) => {
 ipcMain.handle("download-playlist-mp3", async (event, payload) => {
   const { url, outputFolder } = payload;
   const ytDlpBin = await resolveYtDlpPath();
-  const ffmpegBin = await resolveFfmpegPath();
+  const ffmpegLocation = await resolveFfmpegLocation();
   const outputTemplate = path.join(outputFolder, "%(playlist_index)02d - %(title)s.%(ext)s");
   const { sender } = event;
 
@@ -373,7 +433,7 @@ ipcMain.handle("download-playlist-mp3", async (event, payload) => {
     "--audio-quality",
     "0",
     "--ffmpeg-location",
-    ffmpegBin,
+    ffmpegLocation,
     "--no-check-certificates",
     "--no-warnings",
     "-o",
@@ -411,6 +471,7 @@ ipcMain.handle("download-chapters-batch", async (event, payload) => {
   const { url, outputFolder, chapters, baseName } = payload;
   const ytDlpBin = await resolveYtDlpPath();
   const ffmpegBin = await resolveFfmpegPath();
+  const ffmpegLocation = await resolveFfmpegLocation();
   const { sender } = event;
 
   // 1. Download full audio
@@ -423,7 +484,7 @@ ipcMain.handle("download-chapters-batch", async (event, payload) => {
     "-x",
     "--audio-format", "mp3",
     "--audio-quality", "0",
-    "--ffmpeg-location", ffmpegBin,
+    "--ffmpeg-location", ffmpegLocation,
     "--no-check-certificates", "--no-warnings",
     "-o", tempFile,
     url
