@@ -10,6 +10,7 @@ const ffprobeStatic = require("ffprobe-static");
 
 let rendererServer = null;
 let rendererServerUrl = null;
+let bundledFfmpegToolsDirPromise = null;
 
 function getContentType(filePath) {
   if (filePath.endsWith(".html")) return "text/html; charset=utf-8";
@@ -96,8 +97,8 @@ function getUserToolsDir() {
   return path.join(app.getPath("userData"), "tools");
 }
 
-function getUserFfmpegToolsDir() {
-  return path.join(getUserToolsDir(), "ffmpeg-bin");
+function getTempFfmpegToolsRoot() {
+  return path.join(app.getPath("temp"), "oh-my-shokz-ffmpeg-");
 }
 
 function getUserYtDlpPath() {
@@ -146,20 +147,26 @@ async function linkOrCopyTool(sourcePath, targetPath) {
   return true;
 }
 
-async function ensureBundledFfmpegToolsDir() {
+async function createBundledFfmpegToolsDir() {
   const ffmpegPath = getBundledFfmpegPath();
   const ffprobePath = getBundledFfprobePath();
   if (!(ffmpegPath && ffprobePath && (await fileExists(ffmpegPath)) && (await fileExists(ffprobePath)))) {
     return null;
   }
 
-  const toolsDir = getUserFfmpegToolsDir();
-  await ensureDirectory(toolsDir);
+  const toolsDir = await fs.mkdtemp(getTempFfmpegToolsRoot());
   await Promise.all([
     linkOrCopyTool(ffmpegPath, path.join(toolsDir, "ffmpeg")),
     linkOrCopyTool(ffprobePath, path.join(toolsDir, "ffprobe"))
   ]);
   return toolsDir;
+}
+
+async function ensureBundledFfmpegToolsDir() {
+  if (!bundledFfmpegToolsDirPromise) {
+    bundledFfmpegToolsDirPromise = createBundledFfmpegToolsDir();
+  }
+  return bundledFfmpegToolsDirPromise;
 }
 
 async function resolveFfmpegPath() {
