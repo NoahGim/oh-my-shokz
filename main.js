@@ -121,11 +121,21 @@ async function resolveYtDlpPath() {
   return "yt-dlp";
 }
 
+async function ensureDirectory(dirPath) {
+  try {
+    const stat = await fs.lstat(dirPath);
+    if (!stat.isDirectory()) {
+      await fs.rm(dirPath, { recursive: true, force: true });
+    }
+  } catch {}
+  await fs.mkdir(dirPath, { recursive: true });
+}
+
 async function linkOrCopyTool(sourcePath, targetPath) {
   if (!sourcePath || !(await fileExists(sourcePath))) return false;
-  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await ensureDirectory(path.dirname(targetPath));
   try {
-    await fs.unlink(targetPath);
+    await fs.rm(targetPath, { recursive: true, force: true });
   } catch {}
   try {
     await fs.symlink(sourcePath, targetPath);
@@ -144,6 +154,7 @@ async function ensureBundledFfmpegToolsDir() {
   }
 
   const toolsDir = getUserFfmpegToolsDir();
+  await ensureDirectory(toolsDir);
   await Promise.all([
     linkOrCopyTool(ffmpegPath, path.join(toolsDir, "ffmpeg")),
     linkOrCopyTool(ffprobePath, path.join(toolsDir, "ffprobe"))
