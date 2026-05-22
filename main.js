@@ -159,22 +159,27 @@ ipcMain.handle("pick-output-folder", async () => {
   return result.filePaths[0];
 });
 
+let cachedTools = null;
+
 ipcMain.handle("check-tools", async () => {
+  if (cachedTools) return cachedTools;
+
   const ytDlpPath = await resolveYtDlpPath();
   const ffmpegPath = await resolveFfmpegPath();
-  const ytDlp =
-    ytDlpPath !== "yt-dlp" ||
-    (await commandExists("yt-dlp"));
-  const ffmpeg =
-    ffmpegPath !== "ffmpeg" ||
-    (await commandExists("ffmpeg", ["-version"]));
-  return {
-    ytDlp,
-    ffmpeg,
+
+  const [hasYtDlp, hasFfmpeg] = await Promise.all([
+    ytDlpPath === "yt-dlp" ? commandExists("yt-dlp") : Promise.resolve(fsSync.existsSync(ytDlpPath)),
+    ffmpegPath === "ffmpeg" ? commandExists("ffmpeg") : Promise.resolve(fsSync.existsSync(ffmpegPath))
+  ]);
+
+  cachedTools = {
+    ytDlp: hasYtDlp,
+    ffmpeg: hasFfmpeg,
     autoInstallableYtDlp: true,
     ytDlpPath,
     ffmpegPath
   };
+  return cachedTools;
 });
 
 ipcMain.handle("install-tools", async () => {
@@ -198,15 +203,18 @@ ipcMain.handle("get-video-metadata", async (_, payload) => {
     return null;
   }
 
-  const args = ["--dump-single-json", "--no-playlist", "--skip-download", url];
+  const args = [
+    "--dump-json",
+    "--no-playlist",
+    url
+  ];
+
   return new Promise((resolve) => {
-    const logs = [];
     let stdout = "";
     const child = spawn(ytDlpBin, args);
     child.stdout.on("data", (data) => {
       stdout += data.toString();
     });
-    child.stderr.on("data", (data) => logs.push(data.toString()));
     child.on("error", () => resolve(null));
     child.on("close", (code) => {
       if (code !== 0) {
@@ -214,13 +222,66 @@ ipcMain.handle("get-video-metadata", async (_, payload) => {
         return;
       }
       try {
-        const json = JSON.parse(stdout);
+        const metadata = JSON.parse(stdout);
         resolve({
-          title: json.title || "",
-          duration: Number(json.duration || 0)
+          title: metadata.title,
+          duration: metadata.duration,
+          chapters: metadata.chapters || []
         });
       } catch {
         resolve(null);
+      }
+    });
+  });
+});
+ipcMain.handle("get-playlist-metadata", async (_, payload) => {
+  const { url } = payload;
+  const ytDlpBin = await resolveYtDlpPath();
+  if (ytDlpBin === "yt-dlp" && !(await commandExists("yt-dlp"))) {
+    return null;
+  }
+
+  const args = [
+    "--dump-single-json",
+    "--flat-playlist",
+    "--skip-download",
+    url
+  ];
+
+  return new Promise((resolve) => {
+    let stdout = "";
+    const child = spawn(ytDlpBin, args);
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+    child.on("error", () => resolve([]));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        resolve([]);
+        return;
+      }
+      try {
+        const playlist = JSON.parse(stdout);
+        const entries = Array.isArray(playlist.entries) ? playlist.entries : [];
+        const items = entries
+          .map((entry) => {
+            const id = String(entry.id || "").trim();
+            const url = String(entry.url || entry.webpage_url || "").trim();
+            const title = String(entry.title || entry.fulltitle || id || url || "Untitled").trim();
+            const duration = Number(entry.duration || 0);
+            const videoUrl = entry.webpage_url || (id && !id.startsWith("http") ? `https://www.youtube.com/watch?v=${id}` : url);
+            if (!id && !videoUrl) return null;
+            return {
+              title,
+              id,
+              url: videoUrl,
+              duration: isNaN(duration) ? 0 : duration
+            };
+          })
+          .filter(Boolean);
+        resolve(items);
+      } catch {
+        resolve([]);
       }
     });
   });
@@ -253,6 +314,8 @@ ipcMain.handle("download-mp3", async (_, payload) => {
     "0",
     "--ffmpeg-location",
     ffmpegBin,
+    "--no-check-certificates",
+    "--no-warnings",
     "-o",
     outputTemplate
   ];
@@ -266,9 +329,18 @@ ipcMain.handle("download-mp3", async (_, payload) => {
   return new Promise((resolve, reject) => {
     const logs = [];
     const child = spawn(ytDlpBin, args);
+    const { sender } = _;
 
-    child.stdout.on("data", (data) => logs.push(data.toString()));
-    child.stderr.on("data", (data) => logs.push(data.toString()));
+    child.stdout.on("data", (data) => {
+      const msg = data.toString();
+      logs.push(msg);
+      sender.send("download-progress", msg);
+    });
+    child.stderr.on("data", (data) => {
+      const msg = data.toString();
+      logs.push(msg);
+      sender.send("download-progress", msg);
+    });
     child.on("error", (error) => reject(new Error(`yt-dlp 실행 실패: ${error.message}`)));
     child.on("close", (code) => {
       if (code === 0) {
@@ -282,6 +354,126 @@ ipcMain.handle("download-mp3", async (_, payload) => {
       reject(new Error(`다운로드 실패 (exit code ${code})\n${logs.join("")}`));
     });
   });
+});
+
+ipcMain.handle("download-playlist-mp3", async (event, payload) => {
+  const { url, outputFolder } = payload;
+  const ytDlpBin = await resolveYtDlpPath();
+  const ffmpegBin = await resolveFfmpegPath();
+  const outputTemplate = path.join(outputFolder, "%(playlist_index)02d - %(title)s.%(ext)s");
+  const { sender } = event;
+
+  const args = [
+    "--yes-playlist",
+    "--ignore-errors",
+    "--continue",
+    "-x",
+    "--audio-format",
+    "mp3",
+    "--audio-quality",
+    "0",
+    "--ffmpeg-location",
+    ffmpegBin,
+    "--no-check-certificates",
+    "--no-warnings",
+    "-o",
+    outputTemplate,
+    url
+  ];
+
+  return new Promise((resolve, reject) => {
+    const logs = [];
+    sender.send("download-progress", "📋 재생목록 바로 변환 시작...\n");
+    const child = spawn(ytDlpBin, args);
+
+    child.stdout.on("data", (data) => {
+      const msg = data.toString();
+      logs.push(msg);
+      sender.send("download-progress", msg);
+    });
+    child.stderr.on("data", (data) => {
+      const msg = data.toString();
+      logs.push(msg);
+      sender.send("download-progress", msg);
+    });
+    child.on("error", (error) => reject(new Error(`yt-dlp 실행 실패: ${error.message}`)));
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ ok: true, logs: logs.join("") });
+        return;
+      }
+      reject(new Error(`재생목록 변환 실패 (exit code ${code})\n${logs.join("")}`));
+    });
+  });
+});
+
+ipcMain.handle("download-chapters-batch", async (event, payload) => {
+  const { url, outputFolder, chapters, baseName } = payload;
+  const ytDlpBin = await resolveYtDlpPath();
+  const ffmpegBin = await resolveFfmpegPath();
+  const { sender } = event;
+
+  // 1. Download full audio
+  sender.send("download-progress", "📦 전체 오디오 다운로드 시작...");
+  const tempId = Date.now();
+  const tempFile = path.join(outputFolder, `_temp_full_${tempId}.mp3`);
+
+  const downloadArgs = [
+    "--no-playlist",
+    "-x",
+    "--audio-format", "mp3",
+    "--audio-quality", "0",
+    "--ffmpeg-location", ffmpegBin,
+    "--no-check-certificates", "--no-warnings",
+    "-o", tempFile,
+    url
+  ];
+
+  await new Promise((resolve, reject) => {
+    const child = spawn(ytDlpBin, downloadArgs);
+    child.stdout.on("data", (data) => sender.send("download-progress", data.toString()));
+    child.stderr.on("data", (data) => sender.send("download-progress", data.toString()));
+    child.on("error", (error) => reject(error));
+    child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`전체 다운로드 실패 (code ${code})`)));
+  });
+
+  // 2. Split locally using FFmpeg
+  sender.send("download-progress", "✂️ 챕터별 고속 분할 시작...");
+  const results = [];
+
+  for (let i = 0; i < chapters.length; i++) {
+    const chapter = chapters[i];
+    const outputName = chapter.outputName || `${baseName}_${i + 1}`;
+    const outputPath = path.join(outputFolder, `${outputName}.mp3`);
+
+    sender.send("download-progress", `\n분할 중 (${i + 1}/${chapters.length}): ${outputName}`);
+
+    // FFmpeg local split (very fast)
+    const splitArgs = [
+      "-y",
+      "-i", tempFile,
+      "-ss", chapter.startTime,
+      "-to", chapter.endTime,
+      "-c", "copy", // Instant copy without re-encoding
+      outputPath
+    ];
+
+    await new Promise((resolve, reject) => {
+      const child = spawn(ffmpegBin, splitArgs);
+      child.on("error", (error) => reject(error));
+      child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`분할 실패: ${outputName}`)));
+    });
+    results.push(outputPath);
+  }
+
+  // 3. Cleanup
+  try {
+    await fs.unlink(tempFile);
+  } catch (e) {
+    console.error("Temp file cleanup failed:", e);
+  }
+
+  return { ok: true, count: chapters.length };
 });
 
 async function listMp3Files(folder) {

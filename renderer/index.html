@@ -1,114 +1,140 @@
 <!doctype html>
 <html lang="ko">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OhMyShokz</title>
-    <link rel="stylesheet" href="./styles.css" />
-  </head>
-  <body>
-    <div class="app">
-      <h1>OhMyShokz</h1>
-      <p class="subtitle">YouTube 구간 선택 MP3 생성기</p>
 
-      <div class="panel">
-        <label for="urlInput">YouTube 링크</label>
-        <div class="row">
-          <input id="urlInput" type="text" placeholder="https://www.youtube.com/watch?v=..." />
-          <button id="loadVideoButton">영상 불러오기</button>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OhMyShokz</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <div class="app-container">
+    <!-- Left Panel: Work Area -->
+    <section class="work-panel">
+      <header class="app-header">
+        <h1>OhMyShokz</h1>
+        <p class="subtitle">YouTube to Shokz Workflow</p>
+      </header>
+
+      <div class="input-card">
+        <div class="url-input-wrapper">
+          <input id="urlInput" type="text" placeholder="여기에 유튜브 링크를 붙여넣으세요..." autofocus />
+          <button id="loadVideoButton" class="btn-icon" title="영상 불러오기">
+            🔄
+          </button>
         </div>
       </div>
 
-      <div class="video-panel">
-        <div id="videoFrame"></div>
+      <div class="video-card">
+        <div class="video-wrapper">
+          <div id="videoFrame"></div>
+          <div class="placeholder-text">영상 미리보기</div>
+        </div>
+
+        <!-- Fallback / Controls Overlay -->
         <div id="fallbackPanel" class="fallback-panel hidden">
           <div class="fallback-header">
-            <strong id="fallbackTitle">임베드 불가 영상</strong>
-            <span class="hint">아래 바에서 시작/종료를 잡으세요.</span>
+            <strong id="fallbackTitle">퍼가기 금지됨</strong>
+            <span class="hint">아래 슬라이더로 구간을 선택하세요</span>
           </div>
           <div class="fallback-controls">
-            <label for="fallbackStartRange">시작</label>
-            <input id="fallbackStartRange" type="range" min="0" max="100" value="0" />
-            <span id="fallbackStartLabel">00:00:00</span>
+            <input id="fallbackStartRange" type="range" class="range-slider" min="0" max="100" value="0" />
+            <input id="fallbackEndRange" type="range" class="range-slider" min="0" max="100" value="100" />
           </div>
-          <div class="fallback-controls">
-            <label for="fallbackEndRange">종료</label>
-            <input id="fallbackEndRange" type="range" min="0" max="100" value="100" />
-            <span id="fallbackEndLabel">00:01:40</span>
-          </div>
-          <button id="applyFallbackRangeButton">바 시간 적용</button>
-        </div>
-        <div class="row player-actions">
-          <button id="setStartFromPlayerButton">현재 시각을 시작으로</button>
-          <button id="setEndFromPlayerButton">현재 시각을 종료로</button>
-          <button id="openInBrowserButton">브라우저로 열기</button>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="time-grid">
-          <div>
-            <label for="startInput">시작 시간</label>
-            <input id="startInput" type="text" placeholder="00:00:30" />
-          </div>
-          <div>
-            <label for="endInput">종료 시간</label>
-            <input id="endInput" type="text" placeholder="00:01:20" />
+          <div class="range-labels">
+            <span id="fallbackStartLabel">00:00</span>
+            <span id="fallbackEndLabel">00:00</span>
           </div>
         </div>
-        <p class="hint">형식: HH:MM:SS 또는 MM:SS</p>
-      </div>
 
-      <div class="panel">
-        <label>저장 폴더</label>
-        <div class="row">
-          <input id="folderInput" type="text" readonly placeholder="저장 폴더를 선택하세요" />
-          <button id="pickFolderButton">폴더 선택</button>
+        <div class="player-controls">
+          <div class="time-inputs">
+            <div class="time-group">
+              <label>시작 시간</label>
+              <input id="startInput" type="text" placeholder="00:00:00" />
+              <button id="setStartFromPlayerButton" class="btn-small" title="현재 시간으로 설정">📍</button>
+            </div>
+            <div class="time-group">
+              <label>종료 시간</label>
+              <input id="endInput" type="text" placeholder="00:00:00" />
+              <button id="setEndFromPlayerButton" class="btn-small" title="현재 시간으로 설정">📍</button>
+            </div>
+          </div>
+          <button id="applyFallbackRangeButton" class="btn-text hidden">구간 적용</button>
+          <button id="openInBrowserButton" class="btn-text">브라우저에서 열기</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Panel: Result Area -->
+    <section class="result-panel">
+      <div class="status-card">
+        <div class="device-status">
+          <span class="icon">🎧</span>
+          <div class="device-info">
+            <strong>기기 연결 상태</strong>
+            <select id="deviceSelect"></select>
+          </div>
+          <button id="refreshDevicesButton" class="btn-icon" title="새로고침">🔄</button>
+          <button id="pickDeviceFolderButton" class="btn-icon" title="폴더 선택">📂</button>
+        </div>
+        <div class="storage-info hidden">
+          <!-- Future: Storage usage bar -->
         </div>
       </div>
 
-      <div class="panel actions">
-        <button id="downloadButton" class="download">MP3 생성</button>
-        <button id="addToQueueButton">리스트에 저장</button>
-        <button id="downloadQueueButton">리스트 일괄 변환</button>
-        <button id="installToolsButton">도구 자동 설치</button>
-        <button id="refreshFilesButton">파일 목록 새로고침</button>
-        <span id="statusText">준비됨</span>
-      </div>
-
-      <div class="panel">
-        <div class="list-header">
-          <strong>영상 저장 리스트</strong>
-          <span class="hint">링크를 저장해두고 나중에 MP3 변환할 수 있습니다.</span>
+      <div class="action-card">
+        <div class="folder-picker">
+          <label>저장할 폴더:</label>
+          <input id="folderInput" type="text" readonly placeholder="폴더를 선택하세요..." />
+          <button id="pickFolderButton" class="btn-small">찾기</button>
         </div>
-        <div id="queueList" class="queue-list"></div>
-      </div>
 
-      <div class="panel">
-        <label>Shokz 기기 폴더</label>
-        <div class="row">
-          <select id="deviceSelect"></select>
-          <button id="refreshDevicesButton">기기 검색</button>
-          <button id="pickDeviceFolderButton">직접 선택</button>
+        <div class="primary-actions">
+          <button id="downloadButton" class="btn-primary btn-large">
+            <span class="icon">⬇️</span> MP3로 변환하기
+          </button>
+          <button id="addToQueueButton" class="btn-secondary">
+            <span class="icon">➕</span> 대기 목록에 추가
+          </button>
+          <button id="addChaptersToQueueButton" class="btn-secondary hidden">
+            <span class="icon">📚</span> 챕터별 대기 목록에 추가
+          </button>
         </div>
-        <p class="hint">/Volumes 기준 자동 탐지 후 후보를 보여줍니다.</p>
-      </div>
 
-      <div class="panel">
-        <div class="list-header">
-          <strong>MP3 파일 목록</strong>
-          <span class="hint">전송 상태: 기기 폴더에 같은 파일명이 있으면 전송됨</span>
+        <div class="secondary-actions">
+          <button id="downloadQueueButton" class="btn-text">모두 변환하기</button>
+          <button id="installToolsButton" class="btn-text">도구 자동 설치</button>
+          <button id="refreshFilesButton" class="btn-text">파일 목록 갱신</button>
         </div>
-        <div id="filesList" class="file-list"></div>
+        <div id="statusText" class="status-message">준비됨</div>
       </div>
 
-      <details>
-        <summary>로그</summary>
+      <div class="tabs">
+        <input type="radio" name="list-tab" id="tab-queue" checked>
+        <label for="tab-queue">대기 목록</label>
+
+        <input type="radio" name="list-tab" id="tab-files">
+        <label for="tab-files">변환된 파일</label>
+
+        <div class="tab-content content-queue">
+          <div id="queueList" class="list-container"></div>
+        </div>
+        <div class="tab-content content-files">
+          <div id="filesList" class="list-container"></div>
+        </div>
+      </div>
+
+      <details class="log-drawer">
+        <summary>Terminal Logs</summary>
         <pre id="logText"></pre>
       </details>
-    </div>
+    </section>
+  </div>
 
-    <script src="https://www.youtube.com/iframe_api"></script>
-    <script src="./renderer.js"></script>
-  </body>
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="./renderer.js"></script>
+</body>
+
 </html>
