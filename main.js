@@ -155,10 +155,8 @@ async function createBundledFfmpegToolsDir() {
   }
 
   const toolsDir = await fs.mkdtemp(getTempFfmpegToolsRoot());
-  await Promise.all([
-    linkOrCopyTool(ffmpegPath, path.join(toolsDir, "ffmpeg")),
-    linkOrCopyTool(ffprobePath, path.join(toolsDir, "ffprobe"))
-  ]);
+  await linkOrCopyTool(ffmpegPath, path.join(toolsDir, "ffmpeg"));
+  await linkOrCopyTool(ffprobePath, path.join(toolsDir, "ffprobe"));
   return toolsDir;
 }
 

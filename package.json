@@ -1,6 +1,6 @@
 {
   "name": "oh-my-shokz",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "YouTube to MP3 helper for Shokz transfer workflow",
   "main": "main.js",
   "author": "noahgim",
