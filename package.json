@@ -1,6 +1,6 @@
 {
   "name": "oh-my-shokz",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "YouTube to MP3 helper for Shokz transfer workflow",
   "main": "main.js",
   "author": "noahgim",
@@ -21,8 +21,11 @@
   "build": {
     "appId": "com.noahgim.ohmyshokz",
     "productName": "OhMyShokz",
+    "afterPack": "build/after-pack.js",
     "mac": {
       "category": "public.app-category.music",
+      "identity": null,
+      "hardenedRuntime": false,
       "target": [
         "dmg"
       ]
