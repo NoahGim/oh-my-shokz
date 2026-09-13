@@ -7,6 +7,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("child_process");
 const ffmpegStatic = require("ffmpeg-static");
 const ffprobeStatic = require("ffprobe-static");
+const { resolveUnpackedAsarPath } = require("./bundled-tool-path");
 
 let rendererServer = null;
 let rendererServerUrl = null;
@@ -85,12 +86,13 @@ async function commandExists(command, args = ["--version"]) {
 
 function getBundledFfmpegPath() {
   if (!ffmpegStatic) return null;
-  return ffmpegStatic;
+  return resolveUnpackedAsarPath(ffmpegStatic);
 }
 
 function getBundledFfprobePath() {
   if (!ffprobeStatic) return null;
-  return typeof ffprobeStatic === "string" ? ffprobeStatic : ffprobeStatic.path;
+  const ffprobePath = typeof ffprobeStatic === "string" ? ffprobeStatic : ffprobeStatic.path;
+  return resolveUnpackedAsarPath(ffprobePath);
 }
 
 function getUserToolsDir() {
@@ -142,8 +144,8 @@ async function linkOrCopyTool(sourcePath, targetPath) {
     await fs.symlink(sourcePath, targetPath);
   } catch {
     await fs.copyFile(sourcePath, targetPath);
+    await fs.chmod(targetPath, 0o755);
   }
-  await fs.chmod(targetPath, 0o755);
   return true;
 }
 
@@ -162,7 +164,10 @@ async function createBundledFfmpegToolsDir() {
 
 async function ensureBundledFfmpegToolsDir() {
   if (!bundledFfmpegToolsDirPromise) {
-    bundledFfmpegToolsDirPromise = createBundledFfmpegToolsDir();
+    bundledFfmpegToolsDirPromise = createBundledFfmpegToolsDir().catch((error) => {
+      bundledFfmpegToolsDirPromise = null;
+      throw error;
+    });
   }
   return bundledFfmpegToolsDirPromise;
 }
@@ -240,9 +245,9 @@ ipcMain.handle("check-tools", async () => {
   const ffmpegLocation = await resolveFfmpegLocation();
 
   const [hasYtDlp, hasFfmpeg, hasFfprobe] = await Promise.all([
-    ytDlpPath === "yt-dlp" ? commandExists("yt-dlp") : Promise.resolve(fsSync.existsSync(ytDlpPath)),
-    ffmpegPath === "ffmpeg" ? commandExists("ffmpeg") : Promise.resolve(fsSync.existsSync(ffmpegPath)),
-    ffprobePath === "ffprobe" ? commandExists("ffprobe") : Promise.resolve(fsSync.existsSync(ffprobePath))
+    commandExists(ytDlpPath),
+    commandExists(ffmpegPath, ["-version"]),
+    commandExists(ffprobePath, ["-version"])
   ]);
 
   cachedTools = {
@@ -268,6 +273,7 @@ ipcMain.handle("install-tools", async () => {
     ytDlpPath
   );
   await fs.chmod(ytDlpPath, 0o755);
+  cachedTools = null;
 
   return { ok: true, ytDlpPath };
 });

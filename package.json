@@ -1,12 +1,13 @@
 {
   "name": "oh-my-shokz",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "YouTube to MP3 helper for Shokz transfer workflow",
   "main": "main.js",
   "author": "noahgim",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "test": "node --test test/*.test.js",
     "dist": "electron-builder --mac dmg"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     },
     "files": [
       "main.js",
+      "bundled-tool-path.js",
       "preload.js",
       "renderer/**/*",
       "package.json",
